@@ -1,0 +1,63 @@
+# app-deployment.yaml
+# kubectl apply -f app-deployment.yaml --kubeconfig fch26-xxx-kubeconfig.yaml
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-index-html
+  namespace: fch26-stack-street-boys
+data:
+  index.html: |
+    hello world
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+  namespace: fch26-stack-street-boys
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: html-volume
+          mountPath: /usr/share/nginx/html
+      volumes:
+      - name: html-volume
+        configMap:
+          name: nginx-index-html
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: fch26-stack-street-boys
+  labels:
+    app: nginx
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: fch26-stack-street-boys.fch26.stackit.run
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  selector:
+    app: nginx
+        
