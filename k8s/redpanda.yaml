@@ -1,0 +1,51 @@
+# Kafka-compatible broker for sensor ingestion: a single Redpanda node.
+# Topics (auto-created): sensors.density, stores.door, sensors.dlq. Producers (sensor gateways or the sensorsim
+# simulator) write to redpanda:9092; the backend consumes as group "ssb-ingest".
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redpanda
+spec:
+  serviceName: redpanda
+  replicas: 1
+  selector:
+    matchLabels: { app: redpanda }
+  template:
+    metadata:
+      labels: { app: redpanda }
+    spec:
+      containers:
+        - name: redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+          args:
+            - redpanda
+            - start
+            - --mode=dev-container
+            - --smp=1
+            - --memory=512M
+            - --kafka-addr=internal://0.0.0.0:9092
+            - --advertise-kafka-addr=internal://redpanda:9092
+          ports:
+            - { name: kafka, containerPort: 9092 }
+          readinessProbe:
+            exec: { command: ["rpk", "cluster", "health", "--exit-when-healthy"] }
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { memory: 1Gi }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/redpanda/data }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+spec:
+  selector: { app: redpanda }
+  ports:
+    - { name: kafka, port: 9092, targetPort: 9092 }

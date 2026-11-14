@@ -1,0 +1,68 @@
+# Ebb decision layer, added to City Pulse.
+# - forecaster:     Python model service (trains on start, forecasts every 6 h of replay time, publishes to public.forecasts)
+# - ebb-seed:       one-off Job that fills the "ebb" schema from public.readings + public weather/holiday files
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forecaster
+spec:
+  replicas: 1   # one pod only while the seed init container is enabled (seed.py TRUNCATEs tables)
+  selector:
+    matchLabels: { app: forecaster }
+  template:
+    metadata:
+      labels: { app: forecaster }
+    spec:
+      # TEMPORARY: fills the ebb schema, since Jobs are not allowed in this namespace.
+      # Remove this block (and set replicas back to 2) once seeding has succeeded.
+      initContainers:
+        - name: seed
+          image: sripiranavan/ssb-forecaster:1.0.0
+          command: ["python", "seed.py"]
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }
+      containers:
+        - name: forecaster
+          image: sripiranavan/ssb-forecaster:1.0.0
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { memory: 1536Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forecaster
+spec:
+  selector: { app: forecaster }
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+# apiVersion: batch/v1
+# kind: Job
+# metadata:
+#   name: ebb-seed
+# spec:
+#   backoffLimit: 3
+#   template:
+#     spec:
+#       restartPolicy: OnFailure
+#       containers:
+#         - name: seed
+#           image: sripiranavan/ssb-forecaster:1.0.0
+#           command: ["python", "seed.py"]
+#           envFrom:
+#             - configMapRef: { name: app-config }
+#             - secretRef: { name: db-credentials }
