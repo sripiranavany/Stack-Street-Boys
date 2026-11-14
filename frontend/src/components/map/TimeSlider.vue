@@ -24,7 +24,7 @@ onBeforeUnmount(stop)
 </script>
 
 <template>
-  <div class="flex items-center gap-3">
+  <div class="flex items-center gap-2 sm:gap-3">
     <button
       type="button"
       class="grid size-9 shrink-0 place-items-center rounded-full bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40"
@@ -47,6 +47,6 @@ onBeforeUnmount(stop)
       :disabled="length < 2"
       @input="stop"
     />
-    <output class="w-28 shrink-0 text-right text-sm font-medium tabular-nums text-slate-700">{{ label }}</output>
+    <output class="w-24 shrink-0 text-right sm:w-28 text-sm font-medium tabular-nums text-slate-700">{{ label }}</output>
   </div>
 </template>

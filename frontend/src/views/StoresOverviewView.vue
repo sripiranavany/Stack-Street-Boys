@@ -121,9 +121,9 @@ const attention = computed(() =>
               ]"
             />
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[56rem] text-sm">
-              <thead>
+          <div class="md:overflow-x-auto">
+            <table class="block w-full text-sm md:table md:min-w-[56rem]">
+              <thead class="hidden md:table-header-group">
                 <tr class="text-left text-xs text-slate-500">
                   <th scope="col" class="pb-2 pr-3 font-medium">Store</th>
                   <th scope="col" class="px-3 pb-2 font-medium">In store now</th>
@@ -133,9 +133,9 @@ const attention = computed(() =>
                   <th scope="col" class="pb-2 pl-3"><span class="sr-only">Open</span></th>
                 </tr>
               </thead>
-              <tbody>
-                <tr v-for="s in rows" :key="s.store.id" class="border-t border-slate-100">
-                  <td class="py-4 pr-3">
+              <tbody class="block md:table-row-group">
+                <tr v-for="s in rows" :key="s.store.id" class="block border-t border-slate-100 py-3 md:table-row md:py-0">
+                  <td class="block py-2 md:table-cell md:py-4 md:pr-3">
                     <div class="font-semibold text-slate-900">{{ s.store.name }}</div>
                     <div class="text-xs text-slate-500">Capacity {{ s.capacity }} · sensor {{ s.store.sensor_label }}</div>
                     <div v-if="s.context.public_holiday || s.context.events.length || s.context.school_holiday" class="mt-1 flex flex-wrap gap-1">
@@ -144,7 +144,7 @@ const attention = computed(() =>
                       <span v-if="s.context.school_holiday" class="rounded bg-slate-100 px-1.5 text-[11px] font-semibold text-slate-700">{{ s.context.school_holiday }}</span>
                     </div>
                   </td>
-                  <td class="w-64 px-3 py-4">
+                  <td class="block py-2 md:table-cell md:w-64 md:px-3 md:py-4">
                     <div class="flex items-center gap-2">
                       <span class="text-xl font-semibold tabular-nums">{{ s.now.open ? int(s.now.occupancy) : '–' }}</span>
                       <span v-if="s.now.source === 'live'" class="text-[11px] font-semibold uppercase tracking-wide text-green-800">live</span>
@@ -156,18 +156,18 @@ const attention = computed(() =>
                       <div class="h-full" :style="{ width: Math.min(100, s.now.pct * 100) + '%', background: LEVEL[s.now.level].bar }" />
                     </div>
                   </td>
-                  <td class="px-3 py-4">
+                  <td class="block py-2 before:mb-0.5 before:block before:text-xs before:text-slate-500 before:content-[attr(data-label)] md:table-cell md:px-3 md:py-4 md:before:hidden" data-label="Outside">
                     <div class="font-semibold tabular-nums">{{ int(s.area.passers_by) }} / h</div>
                     <div class="text-xs font-semibold" :style="{ color: (s.area.vs_normal ?? 0) >= 0 ? AREA : '#5b6170' }">{{ vsUsual(s.area.vs_normal) }}</div>
                   </td>
-                  <td class="px-3 py-4">
+                  <td class="block py-2 before:mb-0.5 before:block before:text-xs before:text-slate-500 before:content-[attr(data-label)] md:table-cell md:px-3 md:py-4 md:before:hidden" data-label="Peak today">
                     <template v-if="s.peak">
                       <div class="font-semibold tabular-nums">{{ int(s.peak.occupancy) }} at {{ hh(s.peak.hour) }}</div>
                       <div class="text-xs" :class="s.peak.level === 'near_capacity' ? 'font-semibold text-orange-800' : 'text-slate-500'">{{ pct(s.peak.pct) }} of capacity</div>
                     </template>
                     <span v-else class="text-slate-500">Closed today{{ s.context.public_holiday ? ` (${s.context.public_holiday})` : '' }}</span>
                   </td>
-                  <td class="w-52 px-3 py-4">
+                  <td class="block py-2 md:table-cell md:w-52 md:px-3 md:py-4">
                     <div class="flex h-9 items-end gap-0.5 border-b border-slate-300" :title="`${s.store.name}: people inside by hour`">
                       <div
                         v-for="h in s.hours"
@@ -180,10 +180,10 @@ const attention = computed(() =>
                       />
                     </div>
                   </td>
-                  <td class="py-4 pl-3 text-right">
+                  <td class="block py-2 md:table-cell md:py-4 md:pl-3 md:text-right">
                     <RouterLink
                       :to="{ name: 'store', params: { id: s.store.id } }"
-                      class="inline-flex h-10 items-center gap-1.5 rounded-lg border border-slate-300 px-3 font-semibold text-slate-900 hover:bg-slate-50"
+                      class="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3 font-semibold text-slate-900 hover:bg-slate-50 md:w-auto"
                       :aria-label="`Open ${s.store.name} dashboard`"
                     >
                       Open
