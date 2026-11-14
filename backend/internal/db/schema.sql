@@ -113,3 +113,60 @@ CREATE TABLE IF NOT EXISTS model_metrics (
   model_version text NOT NULL, metric text NOT NULL, scope text NOT NULL, value double precision,
   PRIMARY KEY (model_version, metric, scope)
 );
+
+-- Door-counter history per store (hourly). The demo data is synthetic: scripts/make_store_entries.py.
+CREATE TABLE IF NOT EXISTS store_entries (
+  store_id text NOT NULL,
+  ts       timestamptz NOT NULL,
+  entries  int NOT NULL,
+  is_open  boolean NOT NULL,
+  PRIMARY KEY (store_id, ts)
+);
+
+-- Store customer forecast (open hours only), written with every forecast run.
+CREATE TABLE IF NOT EXISTS store_forecasts (
+  run_id   int NOT NULL REFERENCES forecast_runs(id) ON DELETE CASCADE,
+  store_id text NOT NULL,
+  ts       timestamptz NOT NULL,
+  p50 double precision, p10 double precision, p90 double precision,
+  PRIMARY KEY (run_id, store_id, ts)
+);
+
+-- Live door-counter counts per store door and minute, written by the Kafka consumer (internal/ingest).
+-- Hourly store_entries are recomputed from these; people inside now = entries - exits since midnight.
+CREATE TABLE IF NOT EXISTS store_door_counts (
+  store_id text NOT NULL,
+  door     text NOT NULL,
+  ts       timestamptz NOT NULL,   -- start of the minute
+  entries  int NOT NULL,
+  exits    int NOT NULL,
+  PRIMARY KEY (store_id, door, ts)
+);
+CREATE INDEX IF NOT EXISTS store_door_counts_store_ts ON store_door_counts (store_id, ts);
+
+-- What the forecaster learned from past events (forecaster/events.py). One row per event series: occurrences of
+-- the same event in different years share a series key ("Heilbronner Lichterfest 2026" -> heilbronner-lichterfest).
+-- Street multipliers per sensor x hour go to event_profiles (profile 'learned:<series>'), shopper multipliers here.
+CREATE TABLE IF NOT EXISTS event_store_profiles (
+  profile    text NOT NULL,
+  store_id   text NOT NULL,
+  hour       int  NOT NULL,
+  multiplier double precision NOT NULL,
+  PRIMARY KEY (profile, store_id, hour)
+);
+CREATE TABLE IF NOT EXISTS event_learned (
+  series       text PRIMARY KEY,
+  name         text NOT NULL,          -- newest past occurrence
+  category     text NOT NULL,
+  occurrences  int  NOT NULL,
+  last_start   timestamptz NOT NULL,
+  sensor_ids   text[] NOT NULL,
+  street_peak  double precision,       -- highest sensor x hour multiplier
+  street_mean  double precision,       -- mean multiplier over the event's sensor hours
+  store_mean   double precision,       -- mean shopper multiplier over the event's open store hours (NULL: no store nearby)
+  detail       jsonb NOT NULL,         -- {"sensors": {id: {hour: mult}}, "stores": {id: {hour: mult}}}
+  learned_at   timestamptz NOT NULL DEFAULT now()
+);
+-- next planned occurrence of each learned series (filled by the forecaster after projecting recurring events)
+ALTER TABLE event_learned ADD COLUMN IF NOT EXISTS next_name text;
+ALTER TABLE event_learned ADD COLUMN IF NOT EXISTS next_start timestamptz;

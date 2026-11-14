@@ -3,6 +3,7 @@
 - Readings and sensors come from City Pulse's public.readings / public.sensors (no raw CSV needed).
 - Weather, archived weather forecasts and Baden-Wuerttemberg holidays come from ./context (public, small).
 - City Pulse's empty public.weather_hourly, public.holidays and public.events are filled too.
+- Store door-counter history comes from ./context/store_entries.csv (synthetic, see scripts/make_store_entries.py).
 
 Runs as a one-off Kubernetes Job (same image as the forecaster) or locally:
   POSTGRES_PASSWORD=... DB_HOST=localhost python seed.py
@@ -96,11 +97,19 @@ def main():
 
     print("stores, campaigns, Lichterfest ...")
     cur.execute("TRUNCATE ebb.stores; TRUNCATE ebb.campaigns")
-    for sid, name, sensor in (("freshmart-neckarufer", "FreshMart Neckarufer", "d4cce74b"),
-                              ("freshmart-stadtgalerie", "FreshMart Stadtgalerie", "f4928534")):
+    # capacity: most people the store should hold at once; visit_minutes turns door entries/h into people inside
+    for sid, name, sensor, capacity in (("freshmart-neckarufer", "FreshMart Neckarufer", "d4cce74b", 120),
+                                        ("freshmart-stadtgalerie", "FreshMart Stadtgalerie", "f4928534", 160)):
         lat, lon, _ = coords[sensor]
-        cur.execute("INSERT INTO ebb.stores VALUES (%s,%s,%s,%s,%s,%s)", (sid, name, sensor, lat, lon, json.dumps(STORE_CFG)))
+        cfg = dict(STORE_CFG, capacity=capacity, visit_minutes=15)
+        cur.execute("INSERT INTO ebb.stores VALUES (%s,%s,%s,%s,%s,%s)", (sid, name, sensor, lat, lon, json.dumps(cfg)))
         cur.execute("INSERT INTO ebb.campaigns VALUES (%s,%s,true)", (sid, json.dumps(CAMPAIGN_CFG)))
+    if not exists(cur, "ebb.store_entries"):
+        raise SystemExit("ebb.store_entries not found: restart the Go service so it creates the new tables, then seed again")
+    cur.execute("TRUNCATE ebb.store_entries")
+    cur.executemany("INSERT INTO ebb.store_entries VALUES (%s,%s,%s,%s)",
+                    [(r["store_id"], r["ts"], r["entries"], r["is_open"] == "1") for r in rows("store_entries.csv")])
+    print("  ", cur.execute("SELECT count(*) FROM ebb.store_entries").fetchone()[0], "door-counter rows")
     lichterfest(con, cur, active)
     if exists(cur, "public.events"):
         cur.execute("""INSERT INTO public.events (name, starts_at, ends_at, venue, latitude, longitude, source)

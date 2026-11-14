@@ -9,6 +9,8 @@ const links = [
   { to: '/patterns', label: 'Patterns' },
   { to: '/compare', label: 'Compare' },
   { to: '/forecast', label: 'Forecast' },
+  { to: '/stores', label: 'Stores' },
+  { to: '/what-if', label: 'What if' },
 ]
 </script>
 

@@ -1,6 +1,6 @@
 """Ebb forecaster service (FastAPI).
 
-POST /predict   {as_of}                     -> stores a forecast run (7 days, all sensors), returns run id
+POST /predict   {as_of}                     -> stores a forecast run (7 days, all sensors + store customers), returns run id
 POST /whatif    {sensor_id, as_of, scenario, event_size?, event_start?, event_end?} -> baseline + scenario (not stored)
 POST /train     {cutoff?}                   -> retrain production model (used by the live-mode CronJob)
 GET  /model                                 -> model info + evaluation metrics
@@ -74,6 +74,8 @@ def train(cutoff: pd.Timestamp | None = None):
     with LOCK, conn() as con:
         cutoff = cutoff or cutoff_from_db(con)
         log.info("training production model, cutoff %s", cutoff)
+        n, added = em.refresh_events(con, cutoff)
+        log.info("events: %d series learned, projected %s", n, added or "nothing new")
         STATE["model"] = em.fit(con, cutoff, f"prod-{cutoff:%Y-%m-%dT%H}")
         log.info("model ready: %s", STATE["model"].version)
 
@@ -154,11 +156,19 @@ def predict(req: PredictReq):
         raise HTTPException(503, "model not ready")
     as_of_local = local(req.as_of)
     with conn() as con:
+        em.refresh_events(con, as_of_local)  # learn from events that are now in the past, project recurring ones
         df = em.forecast(con, m, as_of_local, req.hours)
         aware = pd.Timestamp(req.as_of)
         aware = aware if aware.tzinfo else aware.tz_localize(em.TZ)
         run_id = em.store_run(con, m, aware.to_pydatetime(), df)
-    return {"run_id": run_id, "rows": len(df), "model": m.version}
+        store_rows = 0
+        try:
+            sdf = em.forecast_stores(con, m, as_of_local, df)
+            em.store_store_run(con, run_id, sdf)
+            store_rows = len(sdf)
+        except Exception:  # the street forecast is still valid; the store plan falls back to the capture-rate formula
+            log.exception("store customer forecast failed")
+    return {"run_id": run_id, "rows": len(df), "store_rows": store_rows, "model": m.version}
 
 
 class WhatIfReq(BaseModel):
@@ -166,6 +176,8 @@ class WhatIfReq(BaseModel):
     as_of: str
     scenario: str = "none"          # none | sunny | rain | cold | hot
     event_size: str | None = None   # S | M | L
+    event_name: str | None = None   # a known name (e.g. "Lichterfest") uses what was learned from past occurrences
+    event_category: str | None = None
     event_start: str | None = None
     event_end: str | None = None
     hours: int = 168
@@ -187,14 +199,34 @@ def whatif(req: WhatIfReq):
     as_of = local(req.as_of)
     extra = None
     if req.event_size and req.event_start and req.event_end:
-        extra = [{"name": "What-if event", "start": local(req.event_start), "end": local(req.event_end),
+        extra = [{"name": req.event_name or "What-if event", "category": req.event_category or "event",
+                  "start": local(req.event_start), "end": local(req.event_end),
                   "sensor_ids": [req.sensor_id], "size": req.event_size, "profile": None}]
     with conn() as con:
         base = em.forecast(con, m, as_of, req.hours, with_reasons=False)
         scen = em.forecast(con, m, as_of, req.hours, SCENARIOS.get(req.scenario), extra, with_reasons=False)
+        # shoppers at stores next to this sensor, from the same two street forecasts
+        stores_out = []
+        try:
+            sb, ss = em.forecast_stores(con, m, as_of, base), em.forecast_stores(con, m, as_of, scen)
+            ids = em.load_stores(con)
+            for sid in ids[ids.sensor_id == req.sensor_id].store_id:
+                x, y = sb[sb.store_id == sid], ss[ss.store_id == sid]
+                stores_out.append({"store_id": sid, "points": [
+                    {"ts": h.tz_localize(em.TZ, ambiguous=True, nonexistent="shift_forward").isoformat(),
+                     "baseline": round(float(a), 1), "scenario": round(float(c), 1)} for h, a, c in zip(x.hour, x.p50, y.p50)]})
+        except Exception:
+            log.exception("what-if store forecast failed")
     b = base[base.sensor_id == req.sensor_id]
     s = scen[scen.sensor_id == req.sensor_id]
-    return {"points": [{"ts": h.tz_localize(em.TZ, ambiguous=True, nonexistent="shift_forward").isoformat(),
+    ev_rows = s[s.event_name.notna()] if "event_name" in s else s.iloc[0:0]
+    event = None
+    if len(ev_rows):
+        r = ev_rows.iloc[0]
+        event = {"name": r.event_name, "basis": r.get("event_basis"), "based_on": r.get("event_based_on"),
+                 "mean_mult": round(float(ev_rows.event_mult.mean()), 2)}
+    return {"as_of": as_of.isoformat(), "event": event, "stores": stores_out,
+            "points": [{"ts": h.tz_localize(em.TZ, ambiguous=True, nonexistent="shift_forward").isoformat(),
                         "baseline": round(float(x), 2), "scenario": round(float(y), 2)}
                        for h, x, y in zip(b.hour, b.p50, s.p50)]}
 
@@ -214,4 +246,6 @@ def model_info():
     m = STATE["model"]
     return {"model": m.version if m else None, "cutoff": str(m.cutoff) if m else None,
             "features": em.LAG_FEATS, "algorithm": "HistGradientBoostingRegressor (p10/p50/p90)",
+            "store_model": {"stores": m.stores, "features": em.STORE_FEATS,
+                            "trained_on": "synthetic door-counter data (scripts/make_store_entries.py)"} if m and m.stores else None,
             "evaluation": STATE["eval"], "error": STATE["error"]}

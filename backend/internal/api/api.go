@@ -46,11 +46,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 		{"GET /api/v1/alerts", s.getAlerts},
 		{"PATCH /api/v1/alerts/{id}", s.patchAlert},
 		{"GET /api/v1/events", s.getEvents},
+		{"GET /api/v1/events/learned", s.getLearnedEvents},
 		{"POST /api/v1/events", s.postEvent},
 		{"DELETE /api/v1/events/{id}", s.deleteEvent},
 		{"GET /api/v1/model", s.getModel},
 		{"GET /api/v1/stores", s.getStores},
+		{"GET /api/v1/stores/overview", s.getStoresOverview},
+		{"GET /api/v1/stores/{id}/dashboard", s.getStoreDashboard},
 		{"GET /api/v1/stores/{id}/plan", s.getPlan},
+		{"GET /api/v1/stores/{id}/forecast", s.getStoreForecast},
 		{"PUT /api/v1/stores/{id}/config", s.putStoreConfig},
 		{"GET /api/v1/campaigns/{id}", s.getCampaign},
 		{"PUT /api/v1/campaigns/{id}", s.putCampaign},
@@ -162,7 +166,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postClock(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Action string  `json:"action"` // play | pause | speed | jump | reset
+		Action string  `json:"action"` // play | pause | speed | jump | reset | live | replay
 		Speed  float64 `json:"speed"`
 		To     string  `json:"to"`
 	}
@@ -185,6 +189,11 @@ func (s *Server) postClock(w http.ResponseWriter, r *http.Request) {
 		}
 	case "pause":
 		upd["running"] = "false"
+	case "live": // "now" is the wall clock; data arrives from the sensors (Kafka / LIVE_URL)
+		upd["mode"] = "live"
+		upd["force_forecast"] = "true"
+	case "replay": // back to the recorded week, at the current replay time
+		upd["mode"] = "replay"
 	case "speed":
 		if req.Speed <= 0 || req.Speed > 100000 {
 			fail(w, 400, fmt.Errorf("speed out of range"))
@@ -234,17 +243,17 @@ func (s *Server) postClock(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- sensors
 type sensorOut struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Label      string     `json:"label"`
-	Lat        float64    `json:"lat"`
-	Lon        float64    `json:"lon"`
-	Density    *float64   `json:"density"`      // mean of the last hour
-	Typical    float64    `json:"typical"`      // normal for this weekday & hour
-	VsNormal   *float64   `json:"vs_normal"`    // density/typical - 1
-	Estimated  bool       `json:"estimated"`
-	Next3h     *float64   `json:"forecast_next_3h"`
-	Health     *db.Health `json:"health"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Label     string     `json:"label"`
+	Lat       float64    `json:"lat"`
+	Lon       float64    `json:"lon"`
+	Density   *float64   `json:"density"`   // mean of the last hour
+	Typical   float64    `json:"typical"`   // normal for this weekday & hour
+	VsNormal  *float64   `json:"vs_normal"` // density/typical - 1
+	Estimated bool       `json:"estimated"`
+	Next3h    *float64   `json:"forecast_next_3h"`
+	Health    *db.Health `json:"health"`
 }
 
 func (s *Server) getSensors(w http.ResponseWriter, r *http.Request) {
@@ -481,17 +490,17 @@ func (s *Server) getCompare(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	type prof struct {
-		ID           string  `json:"id"`
-		Label        string  `json:"label"`
-		Avg          float64 `json:"avg_density"`
-		Weekday      float64 `json:"weekday_avg"`
-		Weekend      float64 `json:"weekend_avg"`
-		Daytime      float64 `json:"daytime_avg"`
-		Evening      float64 `json:"evening_avg"`
-		RainEffect   float64 `json:"rain_effect"`
-		Max          float64 `json:"max_density"`
-		PeakHour     int     `json:"peak_hour"`
-		BestFor      string  `json:"best_for"`
+		ID         string  `json:"id"`
+		Label      string  `json:"label"`
+		Avg        float64 `json:"avg_density"`
+		Weekday    float64 `json:"weekday_avg"`
+		Weekend    float64 `json:"weekend_avg"`
+		Daytime    float64 `json:"daytime_avg"`
+		Evening    float64 `json:"evening_avg"`
+		RainEffect float64 `json:"rain_effect"`
+		Max        float64 `json:"max_density"`
+		PeakHour   int     `json:"peak_hour"`
+		BestFor    string  `json:"best_for"`
 	}
 	var out []prof
 	for rows.Next() {

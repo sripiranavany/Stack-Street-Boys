@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 	"ssb-backend/internal/api"
 	ebbdb "ssb-backend/internal/db"
+	"ssb-backend/internal/ingest"
 	"ssb-backend/internal/worker"
 )
 
@@ -139,6 +141,12 @@ func main() {
 	if env("EBB_WORKER", "false") == "true" {
 		go (&worker.Worker{P: ebbPool, ForecasterURL: forecaster, LiveURL: os.Getenv("LIVE_URL")}).Run(ctx)
 		log.Printf("ebb worker started")
+	}
+
+	// Sensor ingestion from Kafka (sensors.density, stores.door). Every replica joins the same consumer group,
+	// so partitions are shared and nothing is written twice; the writes are idempotent anyway.
+	if brokers := os.Getenv("KAFKA_BROKERS"); brokers != "" {
+		go (&ingest.Ingester{P: ebbPool, Brokers: strings.Split(brokers, ","), Group: env("KAFKA_GROUP", "ssb-ingest")}).Run(ctx)
 	}
 
 	srv := &http.Server{

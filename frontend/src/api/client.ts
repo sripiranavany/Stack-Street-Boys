@@ -30,3 +30,23 @@ export async function get<T>(path: string, params: Params = {}, signal?: AbortSi
   }
   return (await res.json()) as T
 }
+
+/** POST / DELETE with a JSON body; same error handling as get(). */
+export async function send<T>(method: 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) {
+    let msg = res.statusText
+    try {
+      const b = await res.json()
+      msg = b.error ?? b.message ?? msg
+    } catch {
+      /* body was not JSON */
+    }
+    throw new ApiError(res.status, msg)
+  }
+  return (await res.json()) as T
+}

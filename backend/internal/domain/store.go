@@ -16,6 +16,10 @@ type StoreConfig struct {
 	ItemsPerBuyer        float64 `json:"items_per_buyer"`
 	BatchSize            int     `json:"batch_size"`
 	BakeLeadMin          int     `json:"bake_lead_min"`
+	// Capacity is the most people the store should hold at once; VisitMinutes the average time a shopper stays.
+	// Together they turn door-counter entries per hour into people inside (see occupancy.go).
+	Capacity     int     `json:"capacity,omitempty"`
+	VisitMinutes float64 `json:"visit_minutes,omitempty"`
 }
 
 // IsOpen reports whether the store is open at weekday (0=Mon) and hour.
@@ -76,16 +80,26 @@ type PlanKPIs struct {
 	MissedFixed       float64 `json:"missed_sales_items_fixed"`
 }
 
-// Plan builds the staffing + bake plan for one day from hourly density (index = hour 0..23).
-// avgOpenHourVisitors / avgDayBakeDemand describe an average day (the fixed baseline plan).
+// Plan builds the staffing + bake plan for one day from hourly density (index = hour 0..23),
+// converting density to visitors with the configured capture rate.
 func Plan(c StoreConfig, weekday int, density [24]float64, avgOpenHourVisitors, avgDayBakeDemand float64) ([]HourPlan, PlanKPIs) {
+	var visitors [24]float64
+	for h := range visitors {
+		visitors[h] = c.Visitors(density[h])
+	}
+	return PlanVisitors(c, weekday, density, visitors, avgOpenHourVisitors, avgDayBakeDemand)
+}
+
+// PlanVisitors builds the staffing + bake plan for one day from hourly visitors (index = hour 0..23).
+// density is only reported alongside. avgOpenHourVisitors / avgDayBakeDemand describe an average day (the fixed baseline plan).
+func PlanVisitors(c StoreConfig, weekday int, density, visitors [24]float64, avgOpenHourVisitors, avgDayBakeDemand float64) ([]HourPlan, PlanKPIs) {
 	var k PlanKPIs
 	fixedCash := c.Cashiers(avgOpenHourVisitors)
 	out := make([]HourPlan, 24)
 	for h := 0; h < 24; h++ {
 		p := HourPlan{Hour: h, Open: c.IsOpen(weekday, h), Density: density[h]}
 		if p.Open {
-			p.Visitors = c.Visitors(density[h])
+			p.Visitors = visitors[h]
 			p.Cashiers = c.Cashiers(p.Visitors)
 			p.FixedCash = fixedCash
 			p.BakeDemand = p.Visitors * c.BakeryBuyRate * c.ItemsPerBuyer

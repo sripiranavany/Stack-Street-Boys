@@ -4,6 +4,7 @@ All timestamps inside this module are naive Europe/Berlin local hours.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -12,6 +13,8 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingRegressor
 
+import events as ev_mod
+
 TZ = "Europe/Berlin"
 TRAIN_START = pd.Timestamp("2026-06-12")
 EXCLUDED_DAYS = (pd.Timestamp("2026-06-17"), pd.Timestamp("2026-06-21"))  # outage + Lichterfest
@@ -19,6 +22,10 @@ BASE_FEATS = ["sid", "hod", "dow", "temp", "precip", "cloud", "sun", "wind", "ho
 LAG_FEATS = BASE_FEATS + ["lag7", "dmean7"]
 WX = ["temp", "precip", "cloud", "sun", "wind"]
 SIZE_MULT = {"S": 1.3, "M": 2.0, "L": 4.0}
+# Store customers: door-counter entries per open hour, from street density + calendar + weather + last week's count
+STORE_FEATS = ["store", "hod", "dow", "temp", "precip", "cloud", "sun", "wind", "holiday", "school", "eve", "density", "lag7"]
+QUANTS = ((0.1, "p10"), (0.5, "p50"), (0.9, "p90"))
+log = logging.getLogger("forecaster")
 
 
 # ---------------------------------------------------------------- data access
@@ -105,6 +112,7 @@ class EbbModel:
     sensors: list[str]
     models: dict = field(default_factory=dict)     # (feats_name, q) -> fitted model
     climate: pd.DataFrame | None = None            # month x hod typical weather
+    stores: list[str] = field(default_factory=list)  # stores with a trained customer model ("store", q) in models
 
     @property
     def sid(self):
@@ -128,6 +136,8 @@ def fit(con, cutoff: pd.Timestamp, version: str, frame: pd.DataFrame | None = No
     df = training_frame(con, cutoff, sensors) if frame is None else frame
     excl = (df.hour >= EXCLUDED_DAYS[0]) & (df.hour < EXCLUDED_DAYS[1] + pd.Timedelta(days=1))
     tr = df[(df.hour >= TRAIN_START) & (df.hour < cutoff) & ~excl].dropna(subset=WX)
+    # past events are applied as learned multipliers on top, so the base model only sees normal hours
+    tr = ev_mod.drop_event_hours(tr, ev_mod.event_hours(ev_mod.load(con), cutoff))
     m = EbbModel(version=version, cutoff=cutoff, sensors=sensors)
     y = np.log1p(tr.value)
     for name, feats, rows in (("lag", LAG_FEATS, tr.dropna(subset=["lag7", "dmean7"])), ("nolag", BASE_FEATS, tr)):
@@ -139,6 +149,10 @@ def fit(con, cutoff: pd.Timestamp, version: str, frame: pd.DataFrame | None = No
     wx = wx[wx.hour < cutoff]
     m.climate = wx.assign(month=wx.hour.dt.month, hod=wx.hour.dt.hour).groupby(["month", "hod"])[WX].mean()
     m.climate["precip"] = 0.0  # "typical" = dry
+    try:
+        fit_stores(con, m, cutoff)
+    except Exception as e:  # no door-counter data (or tables not migrated yet): sensor forecasts still work
+        log.warning("store customer model not trained: %s", e)
     return m
 
 
@@ -198,7 +212,23 @@ def horizon_frame(con, m: EbbModel, as_of: pd.Timestamp, hours: int = 168, weath
     return df
 
 
+def refresh_events(con, as_of: pd.Timestamp):
+    """Learn event effects from history up to as_of and project recurring events (see events.py)."""
+    stores = load_stores(con)
+    try:
+        entries = load_entries(con, until=as_of)
+    except Exception:  # no door-counter table yet
+        entries = pd.DataFrame(columns=["store_id", "hour", "entries"])
+    return ev_mod.refresh(con, as_of, load_hourly(con, until=as_of), entries, stores[["store_id", "sensor_id"]])
+
+
 def apply_events(con, df: pd.DataFrame, extra_events: list[dict] | None = None) -> pd.DataFrame:
+    """Event multipliers: explicit profile, else learned from past occurrences, else category, else size (events.py)."""
+    return ev_mod.apply(con, df, extra_events)
+
+
+def _apply_events_by_size(con, df: pd.DataFrame, extra_events: list[dict] | None = None) -> pd.DataFrame:
+    """Previous behaviour (explicit profile or fixed size multiplier), kept for comparison."""
     ev, prof = load_events(con)
     rows = ev.to_dict("records") + (extra_events or [])
     df["event_mult"] = 1.0
@@ -244,6 +274,10 @@ def explain(m: EbbModel, df: pd.DataFrame, base_p50: np.ndarray) -> list[dict]:
         r["cloud"] = round(float(df.cloud.iloc[i]), 0)
         if df.event_mult.iloc[i] != 1.0:
             r["event"] = {"name": df.event_name.iloc[i], "mult": round(float(df.event_mult.iloc[i]), 2)}
+            if "event_basis" in df and df.event_basis.iloc[i]:
+                r["event"]["basis"] = df.event_basis.iloc[i]          # profile | learned | category | size
+                if df.event_based_on.iloc[i]:
+                    r["event"]["based_on"] = df.event_based_on.iloc[i]
         out.append(r)
     return out
 
@@ -269,6 +303,136 @@ def store_run(con, m: EbbModel, as_of_aware: datetime, df: pd.DataFrame) -> int:
             cp.write_row((run_id, r.sensor_id, ts.to_pydatetime(), float(r.p50), float(r.p10), float(r.p90),
                           json.dumps(r.reasons)))
     return run_id
+
+
+# ---------------------------------------------------------------- store customers
+def load_stores(con) -> pd.DataFrame:
+    return q(con, "SELECT id AS store_id, sensor_id, config FROM stores ORDER BY id")
+
+
+def load_entries(con, until: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Door-counter entries for open hours, as naive Europe/Berlin hours."""
+    sql = """SELECT store_id, ts AT TIME ZONE 'Europe/Berlin' AS hour, entries
+             FROM store_entries WHERE is_open {cond}"""
+    if until is not None:
+        df = q(con, sql.format(cond="AND ts AT TIME ZONE 'Europe/Berlin' < %(u)s"), {"u": until.to_pydatetime()})
+    else:
+        df = q(con, sql.format(cond=""))
+    df["hour"] = pd.to_datetime(df.hour)
+    df["entries"] = df.entries.astype(float)
+    return df
+
+
+def store_features(df: pd.DataFrame, entries: pd.DataFrame, pub: set, school: set, store_ids: list[str]) -> pd.DataFrame:
+    """df has store_id, hour, density and the weather columns; adds calendar, eve-of-holiday and last week's count."""
+    df = add_calendar(df, pub, school)
+    df["eve"] = (df.hour.dt.normalize() + pd.Timedelta(days=1)).isin(pub).astype(int)
+    lag = entries[["store_id", "hour", "entries"]].rename(columns={"entries": "lag7"})
+    lag["hour"] = lag.hour + pd.Timedelta(days=7)
+    df = df.merge(lag, on=["store_id", "hour"], how="left")
+    df["store"] = df.store_id.map({s: i for i, s in enumerate(store_ids)})
+    return df
+
+
+def store_training_frame(con, stores: pd.DataFrame, hist: pd.DataFrame | None = None, density: pd.DataFrame | None = None):
+    """One row per store x counted open hour. density defaults to the measured street density (NaN while the sensor is offline)."""
+    entries = load_entries(con)
+    if density is None:
+        hist = load_hourly(con) if hist is None else hist
+        density = hist.rename(columns={"value": "density"})
+    df = entries.merge(stores[["store_id", "sensor_id"]], on="store_id")
+    df = df.merge(density[["sensor_id", "hour", "density"]], on=["sensor_id", "hour"], how="left")
+    df = df.merge(load_weather(con, "actual").drop(columns="lead_days"), on="hour", how="left")
+    pub, school = load_holidays(con)
+    return store_features(df, entries, pub, school, stores.store_id.tolist())
+
+
+def fit_stores(con, m: EbbModel, cutoff: pd.Timestamp):
+    stores = load_stores(con)
+    if stores.empty:
+        return
+    df = store_training_frame(con, stores)
+    tr = df[(df.hour >= TRAIN_START) & (df.hour < cutoff)].dropna(subset=WX)
+    tr = ev_mod.drop_event_hours(tr, ev_mod.event_hours(ev_mod.load(con), cutoff))  # events: learned multipliers instead
+    if len(tr) < 500:
+        log.warning("store customer model not trained: only %d counted hours before %s", len(tr), cutoff)
+        return
+    y = np.log1p(tr.entries)
+    for qn, _ in QUANTS:
+        m.models[("store", qn)] = (gbm() if qn == 0.5 else gbm("quantile", qn)).fit(tr[STORE_FEATS], y)
+    m.stores = stores.store_id.tolist()
+    log.info("store customer model trained on %d counted hours (%s)", len(tr), ", ".join(m.stores))
+
+
+def _predict_stores(m: EbbModel, df: pd.DataFrame) -> pd.DataFrame:
+    out = pd.DataFrame({col: np.expm1(m.models[("store", qn)].predict(df[STORE_FEATS])) for qn, col in QUANTS}, index=df.index)
+    out = out.clip(lower=0)
+    out[["p10", "p50", "p90"]] = np.sort(out[["p10", "p50", "p90"]].values, axis=1)
+    return out
+
+
+def forecast_stores(con, m: EbbModel, as_of: pd.Timestamp, fc: pd.DataFrame) -> pd.DataFrame:
+    """Customers per open hour for every store, from the street forecast `fc` (output of forecast())."""
+    cols = ["store_id", "hour", "p10", "p50", "p90"]
+    if not m.stores:
+        return pd.DataFrame(columns=cols)
+    stores = load_stores(con)
+    stores = stores[stores.store_id.isin(m.stores)]
+    pub, school = load_holidays(con)
+    parts = []
+    for st in stores.itertuples():
+        use = ["hour"] + WX + ["p50"] + [c for c in ("event_mult", "event_profile") if c in fc]
+        d = fc.loc[fc.sensor_id == st.sensor_id, use].rename(columns={"p50": "density"})
+        cfg = st.config
+        open_ = (d.hour.dt.dayofweek.isin(cfg.get("open_days", [])) & (d.hour.dt.hour >= cfg.get("open_from", 0))
+                 & (d.hour.dt.hour < cfg.get("open_to", 24)) & ~d.hour.dt.normalize().isin(pub))
+        parts.append(d[open_].assign(store_id=st.store_id))
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+    df = store_features(df, load_entries(con, until=as_of), pub, school, m.stores)
+    pred = _predict_stores(m, df)
+    # Event hours with a learned shopper effect: predict from the street level WITHOUT the event, then apply what
+    # the door counters showed in past occurrences (e.g. Lichterfest: crowds outside, hardly more shoppers).
+    smult = ev_mod.store_multipliers(con)
+    if smult and "event_profile" in df:
+        mult = np.array([smult.get((p, s, h.hour), np.nan) if p else np.nan
+                         for p, s, h in zip(df.event_profile, df.store_id, df.hour)])
+        has = ~np.isnan(mult)
+        if has.any():
+            base = df.loc[has].copy()
+            base["density"] = base.density / base.event_mult.astype(float)
+            bp = _predict_stores(m, base)
+            pred.loc[has, ["p10", "p50", "p90"]] = bp[["p10", "p50", "p90"]].values * mult[has][:, None]
+    return pd.concat([df[["store_id", "hour"]], pred], axis=1)[cols]
+
+
+def store_store_run(con, run_id: int, df: pd.DataFrame):
+    with con.cursor() as cur, cur.copy("COPY store_forecasts (run_id, store_id, ts, p50, p10, p90) FROM STDIN") as cp:
+        for r in df.itertuples():
+            ts = r.hour.tz_localize(TZ, ambiguous=True, nonexistent="shift_forward")
+            cp.write_row((run_id, r.store_id, ts.to_pydatetime(), float(r.p50), float(r.p10), float(r.p90)))
+
+
+def evaluate_stores(con, m: EbbModel, te: pd.DataFrame, cutoff: pd.Timestamp, test_end: pd.Timestamp) -> dict:
+    """Held-out store hours, fed with the street model's own predicted density (as in production).
+    Baselines: the fixed capture-rate formula on the same density, and the typical count for that weekday and hour."""
+    if not m.stores:
+        return {}
+    stores = load_stores(con)
+    density = te[["sensor_id", "hour", "p50"]].rename(columns={"p50": "density"})
+    df = store_training_frame(con, stores, density=density)
+    typ = df[(df.hour >= TRAIN_START) & (df.hour < cutoff)].groupby(["store_id", "dow", "hod"]).entries.median().rename("typical")
+    t = df[(df.hour >= cutoff) & (df.hour < test_end)].dropna(subset=WX + ["density"]).join(typ, on=["store_id", "dow", "hod"])
+    t = t.dropna(subset=["typical"])
+    if t.empty:
+        return {}
+    cfg = {r.store_id: r.config for r in stores.itertuples()}
+    t["model"] = _predict_stores(m, t).p50.values
+    t["formula"] = [d * 3600 / max(cfg[s].get("dwell_seconds", 30), 1) * cfg[s].get("capture_rate", 0.03)
+                    for s, d in zip(t.store_id, t.density)]
+    return {"wape_hourly_store_model": wape(t.entries, t.model), "wape_hourly_store_fixed_rate": wape(t.entries, t.formula),
+            "wape_hourly_store_typical_week": wape(t.entries, t.typical), "n_store_test_hours": int(len(t))}
 
 
 # ---------------------------------------------------------------- evaluation
@@ -302,4 +466,8 @@ def evaluate(con, cutoff=pd.Timestamp("2026-10-01"), test_end=pd.Timestamp("2026
     res["coverage_p10_p90"] = float(((day.value >= day.p10) & (day.value <= day.p90)).mean() * 100)
     res["per_sensor"] = {s: wape(g.value, g.p50) for s, g in day.groupby("sensor_id")}
     res["n_test_hours"] = int(len(day))
+    try:
+        res.update(evaluate_stores(con, m, te, cutoff, test_end))
+    except Exception as e:
+        log.warning("store model evaluation skipped: %s", e)
     return res, te, m

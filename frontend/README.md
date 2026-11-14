@@ -39,6 +39,9 @@ VITE_API_PROXY=https://your-host npm run dev
 | `/patterns/:id?` | **Pattern heatmap** – hour × weekday grid |
 | `/compare` | **Compare** – two sensors or two periods side by side |
 | `/forecast/:id?` | **Forecast** – 72 h with confidence band and recommendation card |
+| `/stores` | **All stores** – people inside now, foot traffic outside, today's peak, sortable |
+| `/stores/:id` | **Store dashboard** – people inside (live door counter or estimate), hourly chart with weather / holiday / event reasons, next hours with cashiers, bakery and staffing plan (oven schedule, leftovers vs a fixed plan), Calm Hours app discounts (simulation + test coupon), events (add / remove, learned from past events), typical week |
+| `/what-if` | **What if…?** – change the week's weather and/or add an event; the forecast runs as usual and with the changes, showing foot traffic, shoppers, cashiers and bakery items |
 
 The role switcher in the header changes default map mode, rankings, wording and recommendations. The choice is stored in `localStorage`.
 

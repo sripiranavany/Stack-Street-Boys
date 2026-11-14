@@ -115,6 +115,69 @@ func (s *Server) dayDensity(ctx context.Context, sensor string, day, now time.Ti
 	return d, src
 }
 
+// dayVisitors: hourly store visitors for one day (closed hours stay 0). Door-counter counts for past hours, the store
+// model's forecast for future hours, and the configured capture-rate formula on street density where neither exists.
+func (s *Server) dayVisitors(ctx context.Context, st store, day, now time.Time, dens [24]float64) ([24]float64, [24]string) {
+	var v [24]float64
+	var src [24]string
+	var open [24]bool
+	wd := db.Weekday(day)
+	for h := 0; h < 24; h++ {
+		if open[h] = st.Config.IsOpen(wd, h); open[h] {
+			v[h], src[h] = st.Config.Visitors(dens[h]), "capture-rate"
+		}
+	}
+	end := day.AddDate(0, 0, 1)
+	set := func(q, source string, args ...any) {
+		rows, err := s.P.Query(ctx, q, args...)
+		if err != nil { // tables not migrated or seeded yet: keep the formula
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var ts time.Time
+			var x float64
+			if rows.Scan(&ts, &x) == nil {
+				if h := ts.In(db.Berlin).Hour(); open[h] {
+					v[h], src[h] = x, source
+				}
+			}
+		}
+	}
+	if runID, _, _, err := s.latestRun(ctx, now); err == nil {
+		set(`SELECT ts, p50 FROM store_forecasts WHERE run_id=$1 AND store_id=$2 AND ts >= $3 AND ts < $4`, "model", runID, st.ID, day, end)
+	}
+	set(`SELECT ts, entries::float8 FROM store_entries WHERE store_id=$1 AND is_open AND ts >= $2 AND ts < $3 AND ts + interval '1 hour' <= $4`,
+		"counted", st.ID, day, end, now)
+	return v, src
+}
+
+// typicalEntries: median door-counter entries per weekday x hour over the 5 weeks before the replay start
+// (same reference window as the typical street profile). ok is false when the store has no door-counter history.
+func (s *Server) typicalEntries(ctx context.Context, storeID string) (p [7][24]float64, ok bool) {
+	st, err := s.now(ctx)
+	if err != nil {
+		return p, false
+	}
+	rows, err := s.P.Query(ctx, `
+		SELECT (extract(isodow FROM ts AT TIME ZONE 'Europe/Berlin')::int - 1), extract(hour FROM ts AT TIME ZONE 'Europe/Berlin')::int,
+		       percentile_cont(0.5) WITHIN GROUP (ORDER BY entries)
+		FROM store_entries WHERE store_id=$1 AND is_open AND ts >= $2 AND ts < $3 GROUP BY 1, 2`,
+		storeID, st.ReplayStart.AddDate(0, 0, -35), st.ReplayStart)
+	if err != nil {
+		return p, false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var d, h int
+		var v float64
+		if rows.Scan(&d, &h, &v) == nil {
+			p[d][h], ok = v, true
+		}
+	}
+	return p, ok
+}
+
 // pickDay: explicit ?day=YYYY-MM-DD, otherwise today if the store is still open later, else the next open day.
 func pickDay(r *http.Request, cfg domain.StoreConfig, now time.Time) (time.Time, error) {
 	if v := r.URL.Query().Get("day"); v != "" {
@@ -136,8 +199,9 @@ func pickDay(r *http.Request, cfg domain.StoreConfig, now time.Time) (time.Time,
 
 // averages of a normal week for the fixed baseline plan and the loyalty share.
 func (s *Server) normalWeek(ctx context.Context, st store) (avgOpenHourVisitors, avgDayBake, weekVisitors float64) {
+	counted, hasCounts := s.typicalEntries(ctx, st.ID)
 	p := s.typicalProfile(ctx)[st.SensorID]
-	if p == nil {
+	if p == nil && !hasCounts {
 		return 0, 0, 0
 	}
 	n, days := 0, 0
@@ -145,7 +209,10 @@ func (s *Server) normalWeek(ctx context.Context, st store) (avgOpenHourVisitors,
 		open := false
 		for h := 0; h < 24; h++ {
 			if st.Config.IsOpen(d, h) {
-				v := st.Config.Visitors(p[d][h])
+				v := counted[d][h]
+				if !hasCounts {
+					v = st.Config.Visitors(p[d][h])
+				}
 				weekVisitors += v
 				avgDayBake += v * st.Config.BakeryBuyRate * st.Config.ItemsPerBuyer
 				n++
@@ -183,8 +250,9 @@ func (s *Server) getPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dens, src := s.dayDensity(ctx, st.SensorID, day, st0.SimNow)
+	visitors, vsrc := s.dayVisitors(ctx, st, day, st0.SimNow, dens)
 	avgV, avgBake, _ := s.normalWeek(ctx, st)
-	hours, k := domain.Plan(st.Config, db.Weekday(day), dens, avgV, avgBake)
+	hours, k := domain.PlanVisitors(st.Config, db.Weekday(day), dens, visitors, avgV, avgBake)
 	for i := range hours {
 		hours[i].Density = round(hours[i].Density, 2)
 		hours[i].Visitors = round(hours[i].Visitors, 1)
@@ -193,7 +261,51 @@ func (s *Server) getPlan(w http.ResponseWriter, r *http.Request) {
 	k.VisitorsTotal, k.PeakVisitors, k.BakeDemand = round(k.VisitorsTotal, 0), round(k.PeakVisitors, 0), round(k.BakeDemand, 0)
 	k.WasteEbb, k.WasteFixed, k.MissedFixed = round(k.WasteEbb, 0), round(k.WasteFixed, 0), round(k.MissedFixed, 0)
 	writeJSON(w, map[string]any{"store": st, "day": day.Format("2006-01-02"), "weekday": day.Weekday().String(),
-		"hours": hours, "sources": src, "kpis": k, "normal_open_hour_visitors": round(avgV, 1)})
+		"hours": hours, "sources": src, "visitor_sources": vsrc, "kpis": k, "normal_open_hour_visitors": round(avgV, 1)})
+}
+
+// getStoreForecast: expected customers per open hour from the newest forecast run, with the p10-p90 range.
+func (s *Server) getStoreForecast(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	st0, err := s.now(ctx)
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	st, err := s.loadStore(ctx, r.PathValue("id"))
+	if err != nil {
+		fail(w, 404, err)
+		return
+	}
+	type point struct {
+		Ts  time.Time `json:"ts"`
+		P50 float64   `json:"p50"`
+		P10 float64   `json:"p10"`
+		P90 float64   `json:"p90"`
+	}
+	res := map[string]any{"store": st, "points": []point{}}
+	runID, asOf, ver, err := s.latestRun(ctx, st0.SimNow)
+	if err != nil {
+		writeJSON(w, res)
+		return
+	}
+	rows, err := s.P.Query(ctx, `SELECT ts, p50, p10, p90 FROM store_forecasts WHERE run_id=$1 AND store_id=$2 AND ts > $3 ORDER BY ts`,
+		runID, st.ID, st0.SimNow)
+	if err != nil {
+		fail(w, 500, err)
+		return
+	}
+	defer rows.Close()
+	pts := []point{}
+	for rows.Next() {
+		var p point
+		if rows.Scan(&p.Ts, &p.P50, &p.P10, &p.P90) == nil {
+			p.Ts, p.P50, p.P10, p.P90 = p.Ts.In(db.Berlin), round(p.P50, 1), round(p.P10, 1), round(p.P90, 1)
+			pts = append(pts, p)
+		}
+	}
+	res["points"], res["as_of"], res["model_version"] = pts, asOf, ver
+	writeJSON(w, res)
 }
 
 func (s *Server) putStoreConfig(w http.ResponseWriter, r *http.Request) {
@@ -238,15 +350,13 @@ func (s *Server) putCampaign(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------------------------------------------------------------- Calm Hours
-func visitorsDay(cfg domain.StoreConfig, day time.Time, dens [24]float64) ([24]float64, [24]bool) {
-	var load [24]float64
+func (s *Server) visitorsDay(ctx context.Context, st store, day, now time.Time) ([24]float64, [24]bool) {
+	dens, _ := s.dayDensity(ctx, st.SensorID, day, now)
+	load, _ := s.dayVisitors(ctx, st, day, now, dens)
 	var open [24]bool
 	wd := db.Weekday(day)
 	for h := 0; h < 24; h++ {
-		open[h] = cfg.IsOpen(wd, h)
-		if open[h] {
-			load[h] = cfg.Visitors(dens[h])
-		}
+		open[h] = st.Config.IsOpen(wd, h)
 	}
 	return load, open
 }
@@ -294,8 +404,7 @@ func (s *Server) postOffer(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < 8 && (db.Weekday(day) != req.UsualDow || !day.AddDate(0, 0, 1).After(now)); i++ {
 		day = day.AddDate(0, 0, 1)
 	}
-	dens, _ := s.dayDensity(ctx, st.SensorID, day, now)
-	load, open := visitorsDay(st.Config, day, dens)
+	load, open := s.visitorsDay(ctx, st, day, now)
 	usual := req.UsualHour
 	if usual < 0 {
 		for h := 0; h < 24; h++ {
@@ -448,8 +557,7 @@ func (s *Server) postSimulate(w http.ResponseWriter, r *http.Request) {
 		fail(w, 400, err)
 		return
 	}
-	dens, _ := s.dayDensity(ctx, st.SensorID, day, st0.SimNow)
-	load, open := visitorsDay(st.Config, day, dens)
+	load, open := s.visitorsDay(ctx, st, day, st0.SimNow)
 	_, _, weekVisitors := s.normalWeek(ctx, st)
 	share := 0.5
 	if weekVisitors > 0 {
@@ -462,15 +570,15 @@ func (s *Server) postSimulate(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- ad slots & event planner
 type slot struct {
-	SensorID    string    `json:"sensor_id"`
-	Label       string    `json:"label"`
-	Start       time.Time `json:"start"`
-	End         time.Time `json:"end"`
-	AvgDensity  float64   `json:"avg_density"`
-	Exposure    float64   `json:"exposure_people_hours"`
-	Weather     string    `json:"weather"`
-	WeatherEff  float64   `json:"weather_effect"`
-	Event       string    `json:"event,omitempty"`
+	SensorID   string    `json:"sensor_id"`
+	Label      string    `json:"label"`
+	Start      time.Time `json:"start"`
+	End        time.Time `json:"end"`
+	AvgDensity float64   `json:"avg_density"`
+	Exposure   float64   `json:"exposure_people_hours"`
+	Weather    string    `json:"weather"`
+	WeatherEff float64   `json:"weather_effect"`
+	Event      string    `json:"event,omitempty"`
 }
 
 type fcRow struct {

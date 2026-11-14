@@ -109,8 +109,9 @@ func (s *Server) chatContext(ctx context.Context) (string, error) {
 			req, _ := http.NewRequest("GET", "/?", nil)
 			day, _ := pickDay(req, stv.Config, st.SimNow)
 			dens, _ := s.dayDensity(ctx, stv.SensorID, day, st.SimNow)
+			visitors, _ := s.dayVisitors(ctx, stv, day, st.SimNow, dens)
 			avgV, avgBake, _ := s.normalWeek(ctx, stv)
-			hours, k := domain.Plan(stv.Config, db.Weekday(day), dens, avgV, avgBake)
+			hours, k := domain.PlanVisitors(stv.Config, db.Weekday(day), dens, visitors, avgV, avgBake)
 			fmt.Fprintf(&b, "\nSTORE %s (%s): visitors %.0f, peak %02d:00 (%.0f/h), cashiers by hour:", stv.Name, day.Format("Mon 02 Jan"),
 				k.VisitorsTotal, k.PeakHour, k.PeakVisitors)
 			for _, h := range hours {

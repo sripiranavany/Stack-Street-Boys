@@ -8,3 +8,5 @@ data:
   DB_HOST: timescaledb
   DB_PORT: "5432"
   FORECASTER_URL: http://forecaster:8000
+  # Sensor ingestion: every backend replica joins the "ssb-ingest" consumer group (writes are idempotent).
+  KAFKA_BROKERS: redpanda:9092

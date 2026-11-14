@@ -22,6 +22,8 @@ It shows where the city is busy now, what is typical for a weekday, what is comi
 
 Each folder's README has the details; this page is the overview.
 
+Sensor data arrives through Kafka (Redpanda in this setup): sensor gateways publish to `sensors.density` and `stores.door`, and the Go backend consumes and stores them. Details and a local simulator: [backend/README.md](backend/README.md#sensor-ingestion-kafka).
+
 ## Data in brief
 
 - 12 sensors (9 currently active), people-density and battery readings, 2025-10-16 to 2026-11-07, about 192,000 rows.

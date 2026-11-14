@@ -28,9 +28,10 @@ services:
       PORT: "80"
       FORECASTER_URL: http://forecaster:8000
       EBB_WORKER: "true"
+      KAFKA_BROKERS: redpanda:9092
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
     ports: ["8081:80"]
-    depends_on: { timescaledb: { condition: service_healthy } }
+    depends_on: { timescaledb: { condition: service_healthy }, redpanda: { condition: service_started } }
 
   forecaster:
     build: ./forecaster
@@ -41,6 +42,35 @@ services:
       DB_HOST: timescaledb
       DB_PORT: "5432"
     depends_on: { timescaledb: { condition: service_healthy } }
+
+  # Kafka-compatible broker (single node, dev mode). The backend consumes sensor topics from it.
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports: ["19092:19092"]
+    healthcheck: { test: ["CMD", "rpk", "cluster", "health", "--exit-when-healthy"], interval: 3s, retries: 40 }
+
+  # Fake sensors: replays the recorded street readings and door counts as if they were live and publishes them to
+  # Kafka. Opt in with:  docker compose --profile sim up -d sensorsim
+  sensorsim:
+    build: { context: ./backend, target: sim }
+    profiles: ["sim"]
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+      READINGS_CSV: /data/readings_load.csv
+      ENTRIES_CSV: /data/store_entries.csv
+      SENSORS_CSV: /data/sensors_load.csv
+    volumes:
+      - ./readings_load.csv:/data/readings_load.csv:ro
+      - ./sensors_load.csv:/data/sensors_load.csv:ro
+      - ./forecaster/context/store_entries.csv:/data/store_entries.csv:ro
+    depends_on: { redpanda: { condition: service_healthy } }
 
   frontend:
     build: ./frontend

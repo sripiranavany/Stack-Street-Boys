@@ -7,3 +7,4 @@ resources:
   - backend.yaml
   - frontend.yaml
   - ebb.yaml
+  - redpanda.yaml
