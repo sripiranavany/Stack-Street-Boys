@@ -5,14 +5,19 @@ import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import { storesApi, type StoreSummary } from '@/api/stores'
 import { useAsyncData } from '@/composables/useAsyncData'
 import { AREA, IN_STORE, IN_STORE_FORECAST, LEVEL, hh, int, opensText, pct, vsUsual } from '@/lib/crowd'
-import { fmtFull } from '@/lib/time'
+import { fmtClock } from '@/lib/time'
 
 const data = useAsyncData(
   () => true,
   (_v, s) => storesApi.overview(s),
 )
 const timer = setInterval(() => data.reload(), 60_000)
-onBeforeUnmount(() => clearInterval(timer))
+const nowMs = ref(Date.now())
+const clockTimer = setInterval(() => (nowMs.value = Date.now()), 1000)
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  clearInterval(clockTimer)
+})
 
 const o = computed(() => data.data.value)
 const sort = ref<'now' | 'peak' | 'name'>('now')
@@ -48,7 +53,7 @@ const attention = computed(() =>
       <div>
         <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Store crowd dashboard</p>
         <h1 class="mt-1 text-2xl font-semibold text-slate-900">All stores</h1>
-        <p v-if="o" class="mt-0.5 text-sm text-slate-500">{{ o.stores.length }} stores · {{ fmtFull(o.sim_now) }}</p>
+        <p v-if="o" class="mt-0.5 text-sm text-slate-500">{{ o.stores.length }} stores · {{ fmtClock(nowMs) }}</p>
       </div>
       <span v-if="o" class="inline-flex h-10 items-center gap-2 rounded-full bg-green-50 px-3 text-sm font-medium text-green-800">
         <span class="size-2 rounded-full bg-green-600" aria-hidden="true" />

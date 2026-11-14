@@ -9,6 +9,9 @@ const dayMonth = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day: '2-digit'
 const full = new Intl.DateTimeFormat('en-GB', {
   timeZone: TZ, weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
 })
+const clock = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TZ, weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})
 const hourOnly = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false })
 const weekdayShort = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' })
 
@@ -18,6 +21,8 @@ const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 export const fmtDayHour = (iso: string | number | Date) => dayHour.format(new Date(iso)).replace(',', '')
 /** "Sat 14 Nov, 14:00" */
 export const fmtFull = (iso: string | number | Date) => full.format(new Date(iso)).replace(',', '')
+/** "Sat 14 Nov 14:00:05" */
+export const fmtClock = (iso: string | number | Date) => clock.format(new Date(iso)).replace(',', '')
 export const fmtDate = (iso: string | number | Date) => dayMonth.format(new Date(iso))
 /** Hour of day (0-23) in Berlin local time. */
 export const hourOfDay = (iso: string | number | Date) => Number(hourOnly.format(new Date(iso))) % 24
