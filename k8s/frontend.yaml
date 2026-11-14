@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: sripiranavan/ssb-frontend:1.2.6
+          image: sripiranavan/ssb-frontend:1.2.7
           ports:
             - containerPort: 80
           readinessProbe:
