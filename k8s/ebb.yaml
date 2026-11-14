@@ -1,0 +1,87 @@
+# Ebb decision layer, added to City Pulse.
+# - backend-worker: the same Go image as "backend", running the replay clock / forecast runs / alerts (exactly 1 replica)
+# - forecaster:     Python model service (trains on start, forecasts every 6 h of replay time, publishes to public.forecasts)
+# - ebb-seed:       one-off Job that fills the "ebb" schema from public.readings + public weather/holiday files
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-worker
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: backend-worker }
+  template:
+    metadata:
+      labels: { app: backend-worker }
+    spec:
+      containers:
+        - name: backend
+          image: sripiranavan/ssb-backend:1.2.0
+          env:
+            - { name: EBB_WORKER, value: "true" }
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forecaster
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: forecaster }
+  template:
+    metadata:
+      labels: { app: forecaster }
+    spec:
+      containers:
+        - name: forecaster
+          image: sripiranavan/ssb-forecaster:1.0.0
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            periodSeconds: 10
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { memory: 1536Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: forecaster
+spec:
+  selector: { app: forecaster }
+  ports:
+    - port: 8000
+      targetPort: 8000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ebb-seed
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: sripiranavan/ssb-forecaster:1.0.0
+          command: ["python", "seed.py"]
+          envFrom:
+            - configMapRef: { name: app-config }
+            - secretRef: { name: db-credentials }

@@ -6,3 +6,4 @@ resources:
   - timescaledb.yaml
   - backend.yaml
   - frontend.yaml
+  - ebb.yaml

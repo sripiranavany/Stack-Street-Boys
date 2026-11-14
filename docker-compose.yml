@@ -1,0 +1,51 @@
+# Local copy of the SKE deployment (k8s/): TimescaleDB + Go service (+ Ebb worker) + forecaster + frontend.
+#   docker compose up -d --build
+#   docker compose run --rm forecaster python seed.py   # once, after the backend has created the ebb schema
+#   docker compose restart forecaster                     # trains on the seeded data
+#   open http://localhost:8088
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg17
+    environment: { POSTGRES_USER: app, POSTGRES_DB: energy, POSTGRES_PASSWORD: localdev }
+    ports: ["55432:5432"]
+    volumes:
+      - tsdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./db/schema_extra.sql:/docker-entrypoint-initdb.d/02-schema-extra.sql:ro
+      - ./db/load-local.sh:/docker-entrypoint-initdb.d/03-load.sh:ro
+      - ./sensors_load.csv:/data/sensors_load.csv:ro
+      - ./readings_load.csv:/data/readings_load.csv:ro
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "app", "-d", "energy"], interval: 3s, retries: 40 }
+
+  backend:
+    build: ./backend
+    environment: &db
+      POSTGRES_USER: app
+      POSTGRES_DB: energy
+      POSTGRES_PASSWORD: localdev
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+      PORT: "80"
+      FORECASTER_URL: http://forecaster:8000
+      EBB_WORKER: "true"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+    ports: ["8081:80"]
+    depends_on: { timescaledb: { condition: service_healthy } }
+
+  forecaster:
+    build: ./forecaster
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: energy
+      POSTGRES_PASSWORD: localdev
+      DB_HOST: timescaledb
+      DB_PORT: "5432"
+    depends_on: { timescaledb: { condition: service_healthy } }
+
+  frontend:
+    build: ./frontend
+    ports: ["8088:80"]
+    depends_on: [backend]
+
+volumes:
+  tsdata:

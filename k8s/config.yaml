@@ -7,3 +7,4 @@ data:
   POSTGRES_DB: energy
   DB_HOST: timescaledb
   DB_PORT: "5432"
+  FORECASTER_URL: http://forecaster:8000

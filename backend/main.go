@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"ssb-backend/internal/api"
+	ebbdb "ssb-backend/internal/db"
+	"ssb-backend/internal/worker"
 )
 
 // app holds everything the handlers share.
@@ -42,12 +46,16 @@ func dsn() string {
 	return u.String()
 }
 
-func connect(ctx context.Context) (*pgxpool.Pool, error) {
+// connect opens a pool; tune can adjust the config (e.g. point it at the ebb schema).
+func connect(ctx context.Context, tune ...func(*pgxpool.Config)) (*pgxpool.Pool, error) {
 	cfg, err := pgxpool.ParseConfig(dsn())
 	if err != nil {
 		return nil, err
 	}
 	cfg.MaxConns = 10
+	for _, t := range tune {
+		t(cfg)
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err
@@ -113,6 +121,25 @@ func main() {
 	mux.HandleFunc("GET /api/forecast/{id}", wrap(a.forecast))
 	mux.HandleFunc("GET /api/context", wrap(a.context))
 	mux.HandleFunc("GET /api/export", wrap(a.export))
+
+	// Ebb decision layer (/api/v1): forecasts, store plans, Calm Hours, events, alerts, replay clock.
+	// Its tables live in the "ebb" schema of the same database.
+	ebbPool, err := connect(ctx, ebbdb.ConfigureEbb)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ebbPool.Close()
+	if err := ebbdb.Migrate(ctx, ebbPool); err != nil {
+		log.Fatal(err)
+	}
+	forecaster := env("FORECASTER_URL", "http://forecaster:8000")
+	(&api.Server{P: ebbPool, ForecasterURL: forecaster, GeminiKey: os.Getenv("GEMINI_API_KEY")}).Register(mux)
+	// The worker (replay clock, forecast runs, gap-fill, sensor health, alerts) runs in exactly one place:
+	// enable it with EBB_WORKER=true on a single replica.
+	if env("EBB_WORKER", "false") == "true" {
+		go (&worker.Worker{P: ebbPool, ForecasterURL: forecaster, LiveURL: os.Getenv("LIVE_URL")}).Run(ctx)
+		log.Printf("ebb worker started")
+	}
 
 	srv := &http.Server{
 		Addr:              ":" + env("PORT", "8080"),
