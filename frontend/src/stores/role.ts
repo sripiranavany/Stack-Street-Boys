@@ -1,13 +1,13 @@
 import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
-import { ROLES, type RoleId } from '@/lib/roles'
+import { HIDDEN_ROLES, ROLES, type RoleId } from '@/lib/roles'
 
 const KEY = 'city-pulse:role'
 
 function load(): RoleId {
   try {
     const v = localStorage.getItem(KEY)
-    if (v && v in ROLES) return v as RoleId
+    if (v && v in ROLES && !HIDDEN_ROLES.includes(v as RoleId)) return v as RoleId
   } catch {
     /* storage unavailable */
   }

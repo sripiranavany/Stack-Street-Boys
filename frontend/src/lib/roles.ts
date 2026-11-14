@@ -67,4 +67,7 @@ export const ROLES: Record<RoleId, RoleConfig> = {
   },
 }
 
-export const ROLE_LIST = Object.values(ROLES)
+/** Roles hidden from the UI. Their config stays above so types and copy keep working. */
+export const HIDDEN_ROLES: RoleId[] = ['planner', 'citizen']
+
+export const ROLE_LIST = Object.values(ROLES).filter((r) => !HIDDEN_ROLES.includes(r.id))
