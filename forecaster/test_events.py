@@ -7,6 +7,7 @@ import events as ev
 def test_series_key_and_matching():
     assert ev.series_key("Heilbronner Lichterfest 2026") == "heilbronner-lichterfest"
     assert ev.series_key("Heilbronner Lichterfest 2027 (expected)") == "heilbronner-lichterfest"
+    assert ev.series_key("Käthchen Weihnachtsmarkt 2025") == "kaethchen-weihnachtsmarkt"
     assert ev.same_series("lichterfest", "heilbronner-lichterfest")
     assert not ev.same_series("heilbronner-weindorf", "heilbronner-lichterfest")
     assert not ev.same_series("heilbronner", "heilbronner-lichterfest")  # only a generic word in common
@@ -34,6 +35,14 @@ def test_drop_event_hours():
     cells = pd.DataFrame({"sensor_id": ["a"], "hour": pd.to_datetime(["2026-06-18 18:00"])})
     out = ev.drop_event_hours(df, cells)
     assert len(out) == 2 and not ((out.sensor_id == "a") & (out.hour == pd.Timestamp("2026-06-18 18:00"))).any()
+
+
+def test_editions_group_market_days():
+    days = pd.date_range("2025-11-25 11:00", periods=28, freq="D")
+    g = pd.DataFrame({"start": list(days) + [pd.Timestamp("2026-11-24 11:00")]})
+    assert ev.editions(g) == 2
+    assert len(ev.last_edition(g)) == 1
+    assert len(ev.last_edition(g.iloc[:28])) == 28
 
 
 if __name__ == "__main__":

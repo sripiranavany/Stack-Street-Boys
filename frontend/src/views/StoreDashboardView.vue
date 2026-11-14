@@ -12,7 +12,7 @@ import BaseChart from '@/components/charts/BaseChart.vue'
 import type { EChartsOption } from '@/composables/useEChart'
 import { storesApi, type StoreInfo } from '@/api/stores'
 import { useAsyncData } from '@/composables/useAsyncData'
-import { AREA, IN_STORE, LEVEL, SOURCE, effectPct, hh, int, pct, vsUsual, whyLines } from '@/lib/crowd'
+import { AREA, IN_STORE, LEVEL, SOURCE, effectPct, hh, int, opensText, pct, vsUsual, whyLines } from '@/lib/crowd'
 import { fmtDate, fmtFull, fmtDayHour, hourOfDay } from '@/lib/time'
 
 const props = defineProps<{ id?: string }>()
@@ -174,7 +174,7 @@ const alertStyle = {
                 Door counter {{ hh(hourOfDay(d.now.basis_from)) }}–{{ hh(hourOfDay(d.now.basis_to!)) }}: {{ int(d.now.entries_last_hour) }} entries
               </template>
               <template v-else-if="d.now.open">Estimated ({{ SOURCE[d.now.source] }})</template>
-              <template v-else>Store is closed{{ d.context.public_holiday && d.is_today ? ` — ${d.context.public_holiday}` : '' }}</template>
+              <template v-else>Store is closed{{ d.context.public_holiday && d.is_today ? ` — ${d.context.public_holiday}` : '' }}{{ d.now.next_open ? ` · ${opensText(d.now.next_open, d.sim_now)}` : '' }}</template>
             </p>
           </div>
 

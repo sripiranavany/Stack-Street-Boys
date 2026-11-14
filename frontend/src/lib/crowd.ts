@@ -57,7 +57,14 @@ export function whyLines(w?: HourWhy): string[] {
 const GENERIC = new Set(['event', 'events', 'fest', 'festival', 'market', 'markt', 'day', 'days', 'night', 'nacht', 'tag',
   'the', 'and', 'of', 'der', 'die', 'das', 'und', 'am', 'im', 'in', 'heilbronn', 'heilbronner', 'expected'])
 const tokens = (name: string) =>
-  new Set(name.toLowerCase().replace(/\b(19|20)\d{2}\b/g, ' ').split(/[^a-z0-9äöüß]+/).filter(Boolean))
+  new Set(
+    name
+      .toLowerCase()
+      .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')
+      .replace(/\b(19|20)\d{2}\b/g, ' ')
+      .split(/[^a-z0-9]+/)
+      .filter(Boolean),
+  )
 
 /** Same rule as the forecaster (forecaster/events.py same_series): all words of the shorter name appear in the longer one,
  *  and at least one of them is distinctive. "Lichterfest" matches "Heilbronner Lichterfest 2026". */
@@ -71,4 +78,16 @@ export function sameEvent(a: string, b: string): boolean {
     if (!GENERIC.has(t)) distinctive = true
   }
   return distinctive
+}
+
+const berlinDay = (iso: string | number | Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' }).format(new Date(iso))
+const berlinHM = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit', hour12: false })
+const berlinDow = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Berlin', weekday: 'short' })
+
+/** "opens 07:00" when the next opening is today (relative to now), otherwise "opens Mon 07:00" */
+export function opensText(nextOpen: string | undefined, now: string | undefined): string {
+  if (!nextOpen) return ''
+  const t = new Date(nextOpen)
+  const same = now ? berlinDay(t) === berlinDay(now) : false
+  return `opens ${same ? '' : berlinDow.format(t) + ' '}${berlinHM.format(t)}`
 }

@@ -41,8 +41,11 @@ SHRINK = 1.0  # one past occurrence-day counts as much as this many "no effect" 
 _YEAR = re.compile(r"\b(19|20)\d{2}\b")
 
 
+_UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
+
+
 def series_key(name: str) -> str:
-    s = _YEAR.sub(" ", (name or "").lower()).replace("(expected)", " ")
+    s = _YEAR.sub(" ", (name or "").lower().translate(_UMLAUTS)).replace("(expected)", " ")
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")
 
 
@@ -164,13 +167,13 @@ def learn(con, until: pd.Timestamp, hist: pd.DataFrame, entries: pd.DataFrame, s
         last = g.sort_values("start").iloc[-1]
         detail = {"sensors": {s: {int(r.hod): float(r.ratio) for r in d.itertuples()} for s, d in sp.groupby("sensor_id")},
                   "stores": {s: {int(r.hod): float(r.ratio) for r in d.itertuples()} for s, d in stp.groupby("store_id")}}
-        rows.append((series, last["name"], last.category or "event", len(g),
+        rows.append((series, last["name"], last.category or "event", editions(g),
                      last.start.tz_localize("Europe/Berlin", ambiguous=True, nonexistent="shift_forward").to_pydatetime(),
                      sorted({s for x in g.sensor_ids for s in x}), float(sp.ratio.max()), float(sp.ratio.mean()),
                      float(stp.ratio.mean()) if len(stp) else None, json.dumps(detail)))
         street_prof += [(f"learned:{series}", r.sensor_id, int(r.hod), float(r.ratio)) for r in sp.itertuples()]
         store_prof += [(f"learned:{series}", r.store_id, int(r.hod), float(r.ratio)) for r in stp.itertuples()]
-        log.info("event %s: learned from %d occurrence(s), street x%.2f on average (peak x%.2f)%s", series, len(g),
+        log.info("event %s: learned from %d occurrence(s), street x%.2f on average (peak x%.2f)%s", series, editions(g),
                  sp.ratio.mean(), sp.ratio.max(), f", shoppers x{stp.ratio.mean():.2f}" if len(stp) else "")
 
     with con.cursor() as cur:
@@ -192,25 +195,46 @@ def next_occurrence(start: pd.Timestamp, end: pd.Timestamp, now: pd.Timestamp):
     return start, end
 
 
+EDITION_GAP = pd.Timedelta(days=60)  # entries of one series closer than this belong to the same edition (e.g. one per market day)
+
+
+def editions(g: pd.DataFrame) -> int:
+    """Number of separate editions (years) in a series; a multi-day event stored as one entry per day counts once."""
+    starts = g.start.sort_values()
+    return int(1 + (starts.diff() > EDITION_GAP).sum()) if len(starts) else 0
+
+
+def last_edition(g: pd.DataFrame) -> pd.DataFrame:
+    """The entries of the newest edition of a series."""
+    g = g.sort_values("start")
+    new = (g.start.diff() > EDITION_GAP).cumsum()
+    return g[new == new.iloc[-1]]
+
+
 def project(con, now: pd.Timestamp) -> list[str]:
-    """Add the next occurrence of every recurring event series that has none planned yet. Returns the new names."""
+    """Add the next edition of every recurring event series that has none planned yet: every entry of the newest
+    edition (e.g. each Weindorf evening) shifted by whole years of 52 weeks, so weekdays stay the same."""
     ev = load(con)
     added = []
+    loc = lambda t: t.tz_localize("Europe/Berlin", ambiguous=True, nonexistent="shift_forward").to_pydatetime()
     for series, g in ev[ev.recurring].groupby("series"):
         everything = ev[ev.series == series]
-        last = g.sort_values("start").iloc[-1]   # repeat the recurring occurrences only
-        if last.start > now:
-            continue  # next one already known
-        start, end = next_occurrence(last.start, last["end"], now)
+        block = last_edition(g)                  # repeat the recurring occurrences only
+        if block.start.max() > now:
+            continue  # this edition is still to come: nothing to project yet
+        first = block.start.min()
+        start, _ = next_occurrence(first, first, now)
+        shift = start - first
         if start - now > PROJECT_AHEAD or ((everything.start - start).abs() <= MATCH_TOLERANCE).any():
             continue
+        last = block.iloc[-1]
         name = _YEAR.sub(str(start.year), last["name"]) if _YEAR.search(last["name"]) else f"{last['name']} {start.year}"
-        loc = lambda t: t.tz_localize("Europe/Berlin", ambiguous=True, nonexistent="shift_forward").to_pydatetime()
-        con.execute("""INSERT INTO events (name, category, start_ts, end_ts, sensor_ids, size, recurring, source)
-                       VALUES (%s, %s, %s, %s, %s, %s, true, 'projected')""",
-                    (name, last.category, loc(start), loc(end), list(last.sensor_ids), last["size"]))
+        for e in block.itertuples():
+            con.execute("""INSERT INTO events (name, category, start_ts, end_ts, sensor_ids, size, recurring, source)
+                           VALUES (%s, %s, %s, %s, %s, %s, true, 'projected')""",
+                        (name, e.category, loc(e.start + shift), loc(e.end + shift), list(e.sensor_ids), e.size))
         added.append(name)
-        log.info("recurring event %s: next occurrence projected for %s", series, start.date())
+        log.info("recurring event %s: next edition projected for %s (%d entries)", series, start.date(), len(block))
     return added
 
 

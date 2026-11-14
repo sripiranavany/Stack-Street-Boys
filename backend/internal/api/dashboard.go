@@ -49,6 +49,7 @@ type nowBlock struct {
 	BasisTo      *time.Time `json:"basis_to,omitempty"`
 	Entries      *float64   `json:"entries_last_hour,omitempty"`
 	NextHour     *dashHour  `json:"next_hour,omitempty"`
+	NextOpen     *time.Time `json:"next_open,omitempty"`         // closed: when the store opens next
 	LiveAt       *time.Time `json:"live_at,omitempty"`           // newest live door-counter minute (source "live")
 	EntriesHour  *float64   `json:"entries_this_hour,omitempty"` // live: entries since the start of this hour
 	CountedToday float64    `json:"entries_counted_today"`
@@ -194,6 +195,7 @@ func (s *Server) nowStatus(ctx context.Context, st store, today []dashHour, now 
 	}
 	if !nb.Open {
 		nb.Level = domain.LevelClosed
+		nb.NextOpen = s.nextOpening(ctx, st, now)
 		return nb
 	}
 	// Live headcount from the door counters (Kafka): entries minus exits since midnight, if the counter reported
@@ -224,6 +226,24 @@ func (s *Server) nowStatus(ctx context.Context, st store, today []dashHour, now 
 	nb.Pct = round(nb.Occupancy/float64(capacity), 3)
 	nb.Level = domain.Level(nb.Occupancy, capacity, true)
 	return nb
+}
+
+// nextOpening: the start of the store's next opening hour after now, skipping public holidays (within 8 days).
+func (s *Server) nextOpening(ctx context.Context, st store, now time.Time) *time.Time {
+	t := now.In(db.Berlin).Truncate(time.Hour).Add(time.Hour) // Berlin's offset is whole hours
+	holiday := map[string]bool{}
+	for i := 0; i < 8*24; i, t = i+1, t.Add(time.Hour) {
+		day := midnight(t)
+		key := day.Format("2006-01-02")
+		if _, ok := holiday[key]; !ok {
+			public, _ := s.holidays(ctx, day)
+			holiday[key] = public != ""
+		}
+		if !holiday[key] && st.Config.IsOpen(db.Weekday(t), t.Hour()) {
+			return &t
+		}
+	}
+	return nil
 }
 
 // lastHourDensity: mean street density per active sensor over the hour before now.
@@ -359,7 +379,9 @@ func (s *Server) week(ctx context.Context, st store) map[string]any {
 func hh(h int) string { return fmt.Sprintf("%02d:00", h) }
 
 // storeAlerts: plain-language heads-up for the manager.
-func (s *Server) storeAlerts(ctx context.Context, st store, hours []dashHour, dc dayCtx, fromHour int, area areaBlock, now time.Time, tomorrowHoliday string) []dashAlert {
+// openNow: the store is open at this moment. "Right now" advice (foot traffic vs usual, so staff can be moved) is only
+// given then; before opening or after closing it would be noise.
+func (s *Server) storeAlerts(ctx context.Context, st store, hours []dashHour, dc dayCtx, fromHour int, area areaBlock, now time.Time, tomorrowHoliday string, openNow bool) []dashAlert {
 	capacity := st.Config.CapacityOrDefault()
 	out := []dashAlert{}
 	var near, busy *dashHour
@@ -380,7 +402,7 @@ func (s *Server) storeAlerts(ctx context.Context, st store, hours []dashHour, dc
 		out = append(out, dashAlert{"info", "Busy from " + hh(busy.Hour),
 			fmt.Sprintf("About %.0f people expected; %d cashiers suggested.", busy.Occupancy, busy.Staff)})
 	}
-	if area.VsNormal != nil {
+	if area.VsNormal != nil && openNow {
 		pct := *area.VsNormal * 100
 		switch {
 		case pct >= 20:
@@ -483,12 +505,13 @@ func (s *Server) getStoreDashboard(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	nowBlk := s.nowStatus(ctx, st, today, now)
 	res := map[string]any{
 		"store": st, "capacity": capacity, "visit_minutes": st.Config.VisitMinutesOrDefault(),
 		"sim_now": now, "mode": state.Mode, "day": day.Format("2006-01-02"), "weekday": day.Weekday().String(), "is_today": isToday,
-		"now": s.nowStatus(ctx, st, today, now), "area": area, "hours": hours, "peak": peakOf(hours, capacity), "next_hours": next,
+		"now": nowBlk, "area": area, "hours": hours, "peak": peakOf(hours, capacity), "next_hours": next,
 		"nearby": s.nearby(ctx, st, dens, health, now, 5), "week": s.week(ctx, st),
-		"alerts": s.storeAlerts(ctx, st, hours, dc, fromHour, area, now, tomorrowHoliday), "context": dc,
+		"alerts": s.storeAlerts(ctx, st, hours, dc, fromHour, area, now, tomorrowHoliday, isToday && nowBlk.Open), "context": dc,
 		"upcoming_events": s.upcomingEvents(ctx, st.SensorID, now),
 		"learned_events":  s.learnedEvents(ctx, &st),
 	}
@@ -553,8 +576,9 @@ func (s *Server) getStoresOverview(w http.ResponseWriter, r *http.Request) {
 				sp = append(sp, spark{h.Hour, h.Occupancy, h.Source})
 			}
 		}
-		out = append(out, summary{Store: st, Capacity: capacity, Now: s.nowStatus(ctx, st, hours, now), Area: area,
-			Peak: peakOf(hours, capacity), Hours: sp, Alerts: s.storeAlerts(ctx, st, hours, dc, now.Hour(), area, now, s.closedTomorrowFor(ctx, st, day)),
+		nb := s.nowStatus(ctx, st, hours, now)
+		out = append(out, summary{Store: st, Capacity: capacity, Now: nb, Area: area,
+			Peak: peakOf(hours, capacity), Hours: sp, Alerts: s.storeAlerts(ctx, st, hours, dc, now.Hour(), area, now, s.closedTomorrowFor(ctx, st, day), nb.Open),
 			Context: dc})
 	}
 	writeJSON(w, map[string]any{"sim_now": now, "mode": state.Mode, "stores": out})

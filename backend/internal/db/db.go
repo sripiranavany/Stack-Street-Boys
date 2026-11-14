@@ -37,12 +37,12 @@ func Connect(ctx context.Context, dsn string) *pgxpool.Pool {
 
 // State is the replay / live clock and settings stored in app_state.
 type State struct {
-	Mode        string    `json:"mode"`
-	Running     bool      `json:"running"`
-	Speed       float64   `json:"speed"`
-	SimNow      time.Time `json:"sim_now"`
-	ReplayStart time.Time `json:"replay_start"`
-	ReplayEnd   time.Time `json:"replay_end"`
+	Mode        string            `json:"mode"`
+	Running     bool              `json:"running"`
+	Speed       float64           `json:"speed"`
+	SimNow      time.Time         `json:"sim_now"`
+	ReplayStart time.Time         `json:"replay_start"`
+	ReplayEnd   time.Time         `json:"replay_end"`
 	Raw         map[string]string `json:"-"`
 }
 
@@ -89,6 +89,10 @@ func SetState(ctx context.Context, p *pgxpool.Pool, kv map[string]string) error 
 }
 
 func FormatT(t time.Time) string { return t.In(Berlin).Format(time.RFC3339) }
+
+// FormatClock keeps sub-second precision for the replay clock. The worker advances it several times a second;
+// with whole seconds every small step was rounded away and the clock ran slower than its speed setting.
+func FormatClock(t time.Time) string { return t.In(Berlin).Format(time.RFC3339Nano) }
 
 // Profile is a per sensor weekday(0=Mon) x hour table.
 type Profile map[string]*[7][24]float64

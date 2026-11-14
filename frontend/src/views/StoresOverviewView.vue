@@ -4,7 +4,7 @@ import LoadState from '@/components/common/LoadState.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import { storesApi, type StoreSummary } from '@/api/stores'
 import { useAsyncData } from '@/composables/useAsyncData'
-import { AREA, IN_STORE, IN_STORE_FORECAST, LEVEL, hh, int, pct, vsUsual } from '@/lib/crowd'
+import { AREA, IN_STORE, IN_STORE_FORECAST, LEVEL, hh, int, opensText, pct, vsUsual } from '@/lib/crowd'
 import { fmtFull } from '@/lib/time'
 
 const data = useAsyncData(
@@ -144,7 +144,7 @@ const attention = computed(() =>
                       <span class="text-xl font-semibold tabular-nums">{{ s.now.open ? int(s.now.occupancy) : '–' }}</span>
                       <span v-if="s.now.source === 'live'" class="text-[11px] font-semibold uppercase tracking-wide text-green-800">live</span>
                       <span class="rounded-full px-2 py-0.5 text-xs font-semibold" :class="LEVEL[s.now.level].pill">
-                        {{ LEVEL[s.now.level].label }}<template v-if="s.now.open"> · {{ pct(s.now.pct) }}</template>
+                        {{ LEVEL[s.now.level].label }}<template v-if="s.now.open"> · {{ pct(s.now.pct) }}</template><template v-else-if="s.now.next_open"> · {{ opensText(s.now.next_open, o.sim_now) }}</template>
                       </span>
                     </div>
                     <div class="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">

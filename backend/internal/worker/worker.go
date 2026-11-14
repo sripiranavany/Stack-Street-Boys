@@ -21,13 +21,13 @@ type Worker struct {
 	ForecasterURL string
 	LiveURL       string // optional live PAX feed (JSON array of {sensor_id,time,density,battery})
 
-	ratio       db.Profile
-	busy        atomic.Bool
-	lastHour    time.Time
-	lastTick    time.Time
-	lastHealth  time.Time
-	lastLive    time.Time
-	client      *http.Client
+	ratio      db.Profile
+	busy       atomic.Bool
+	lastHour   time.Time
+	lastTick   time.Time
+	lastHealth time.Time
+	lastLive   time.Time
+	client     *http.Client
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -69,10 +69,10 @@ func (w *Worker) tick(ctx context.Context) error {
 	now := st.SimNow
 	if st.Mode == "replay" && st.Running {
 		now = now.Add(time.Duration(float64(real) * st.Speed))
-		upd := map[string]string{"sim_now": db.FormatT(now)}
+		upd := map[string]string{"sim_now": db.FormatClock(now)}
 		if !now.Before(st.ReplayEnd) {
 			now = st.ReplayEnd
-			upd = map[string]string{"sim_now": db.FormatT(now), "running": "false"}
+			upd = map[string]string{"sim_now": db.FormatClock(now), "running": "false"}
 		}
 		if err := db.SetState(ctx, w.P, upd); err != nil {
 			return err

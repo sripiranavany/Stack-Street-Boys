@@ -119,6 +119,8 @@ export interface NowBlock {
   next_hour?: DashHour
   entries_counted_today: number
   live_at?: string
+  /** closed: start of the next opening hour */
+  next_open?: string
   entries_this_hour?: number
 }
 
