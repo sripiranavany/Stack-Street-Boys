@@ -14,9 +14,14 @@ spec:
     spec:
       containers:
         - name: backend
-          image: sripiranavan/ssb-backend:1.0.0
+          image: sripiranavan/ssb-backend:1.1.0
           ports:
             - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: app-config
+            - secretRef:
+                name: db-credentials
           readinessProbe:
             httpGet:
               path: /healthz
