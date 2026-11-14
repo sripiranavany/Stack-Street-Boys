@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useRoleStore } from '@/stores/role'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -32,6 +33,12 @@ const router = createRouter({
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),
+})
+
+// UI-level role access: a role can only open the pages in its `access` list; anything else goes to its home page.
+router.beforeEach((to) => {
+  const role = useRoleStore()
+  if (!role.can(to.name)) return role.role.home
 })
 
 router.afterEach((to) => {

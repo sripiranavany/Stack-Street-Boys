@@ -1,23 +1,24 @@
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useRoleStore } from '@/stores/role'
-import { ROLE_LIST } from '@/lib/roles'
+import { ROLE_LIST, type RoleId } from '@/lib/roles'
 
 const role = useRoleStore()
-const links = [
-  { to: '/', label: 'Map' },
-  { to: '/sensors', label: 'Sensor' },
-  { to: '/patterns', label: 'Patterns' },
-  { to: '/compare', label: 'Compare' },
-  { to: '/forecast', label: 'Forecast' },
-  { to: '/stores', label: 'Stores' },
-  { to: '/what-if', label: 'What if' },
-]
+const router = useRouter()
+const links = computed(() => role.role.nav)
+
+// Switching role lands on that role's home page.
+function pick(id: RoleId) {
+  role.id = id
+  if (router.currentRoute.value.path !== role.role.home) router.push(role.role.home)
+}
 </script>
 
 <template>
   <header class="sticky top-0 z-[1000] border-b border-slate-200 bg-white/90 backdrop-blur">
     <div class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 md:py-3">
-      <RouterLink to="/" class="flex items-center gap-2 text-lg font-semibold text-slate-900">
+      <RouterLink :to="role.role.home" class="flex items-center gap-2 text-lg font-semibold text-slate-900">
         <span class="inline-block size-3 rounded-full bg-brand-500 ring-4 ring-brand-100" aria-hidden="true" />
         City Pulse
       </RouterLink>
@@ -45,7 +46,8 @@ const links = [
             :aria-checked="role.id === r.id"
             class="whitespace-nowrap rounded-md px-2.5 py-1 text-sm font-medium transition sm:px-3"
             :class="role.id === r.id ? 'bg-white text-brand-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'"
-            @click="role.id = r.id"
+            :title="r.tagline"
+            @click="pick(r.id)"
           >
             {{ r.label }}
           </button>

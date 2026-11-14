@@ -129,9 +129,9 @@ const weekdayModel = computed({ get: () => String(weekday.value), set: (v) => (w
 
       <BaseCard v-if="selected" :title="selected.name" :subtitle="busynessLabel(frame?.values.get(selected.sensor_id)?.intensity)">
         <div class="flex flex-wrap gap-2 text-sm">
-          <RouterLink class="rounded-md bg-brand-50 px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-100" :to="{ name: 'sensor', params: { id: selected.sensor_id } }">Details</RouterLink>
-          <RouterLink class="rounded-md bg-slate-100 px-3 py-1.5 font-medium hover:bg-slate-200" :to="{ name: 'patterns', params: { id: selected.sensor_id } }">Patterns</RouterLink>
-          <RouterLink class="rounded-md bg-slate-100 px-3 py-1.5 font-medium hover:bg-slate-200" :to="{ name: 'forecast', params: { id: selected.sensor_id } }">Forecast</RouterLink>
+          <RouterLink v-if="roleStore.can('sensor')" class="rounded-md bg-brand-50 px-3 py-1.5 font-medium text-brand-700 hover:bg-brand-100" :to="{ name: 'sensor', params: { id: selected.sensor_id } }">Details</RouterLink>
+          <RouterLink v-if="roleStore.can('patterns')" class="rounded-md bg-slate-100 px-3 py-1.5 font-medium hover:bg-slate-200" :to="{ name: 'patterns', params: { id: selected.sensor_id } }">Patterns</RouterLink>
+          <RouterLink v-if="roleStore.can('forecast')" class="rounded-md bg-slate-100 px-3 py-1.5 font-medium hover:bg-slate-200" :to="{ name: 'forecast', params: { id: selected.sensor_id } }">Forecast</RouterLink>
         </div>
       </BaseCard>
       <p v-else class="px-1 text-sm text-slate-500">Select a circle on the map to dive in.</p>
