@@ -17,7 +17,7 @@ It shows where the city is busy now, what is typical for a weekday, what is comi
 |---|---|---|
 | Frontend | [frontend/](frontend/README.md) | Vue 3 + Vite + Pinia, ECharts, Leaflet, Tailwind. Map, sensor detail, weekly patterns, compare, forecast, role views |
 | Backend | [backend/](backend/README.md) | Go REST API over the database (sensors, time series, heatmap, patterns, spikes, forecast, context, export), the store dashboards (`/api/v1`), the Kafka consumer and the worker (replay/live clock, forecast runs, alerts) |
-| Forecaster | [forecaster/](forecaster/) | Python (FastAPI) service with the Ebb model: trains on the data, forecasts street density and store customers for 7 days with p10/p50/p90 bands and reasons (weather, holidays, events), learns event effects, serves what-if scenarios |
+| Forecaster | [forecaster/](forecaster/README.md) | Python (FastAPI) service with the Ebb model: trains on the data, forecasts street density and store customers for 7 days with p10/p50/p90 bands and reasons (weather, holidays, events), learns event effects, serves what-if scenarios |
 | Database | [db/](db/README.md) | TimescaleDB schema, data notes and load files |
 | Kubernetes | [k8s/](k8s/) | Manifests for the database, backend, frontend, forecaster, Redpanda and shared config (Kustomize) |
 | Scripts | [scripts/](scripts/) | Fetch weather / holiday context, generate the synthetic store door-counter entries |
